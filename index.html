@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>請求書</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+
+<style>
+body {
+    font-family: "Hiragino Kaku Gothic ProN", Meiryo, Arial, sans-serif;
+    padding: 20px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+th, td {
+    border: 1px solid #ccc;
+    padding: 6px;
+    text-align: center;
+}
+
+input, select {
+    width: 100%;
+    padding: 4px;
+}
+
+button {
+    margin-top: 8px;
+    padding: 6px 16px;
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+}
+
+.box {
+    width: 45%;
+}
+
+.invoice {
+    display: none;
+    border: 2px solid #000;
+    padding: 20px;
+    margin-top: 30px;
+}
+
+.right {
+    text-align: right;
+}
+
+.popup {
+    display: none;
+    border: 1px solid #aaa;
+    padding: 10px;
+    margin-top: 10px;
+    background: #f9f9f9;
+}
+</style>
+</head>
+
+<body>
+
+<h1>請求書 作成</h1>
+
+<!-- ===== 取引先 ===== -->
+<h3>取引先情報</h3>
+
+<select id="clientSelect" onchange="selectClient()">
+    <option value="">取引先を選択</option>
+</select>
+
+<input id="clientName" placeholder="会社名">
+<input id="clientAddress" placeholder="住所">
+
+<button onclick="saveClient()">取引先を保存</button>
+
+<!-- ===== 商品 ===== -->
+<h3>商品明細</h3>
+
+<table id="itemTable">
+<tr>
+    <th>商品名</th>
+    <th>単価</th>
+    <th>数量</th>
+    <th>消費税</th>
+    <th>価格</th>
+</tr>
+</table>
+
+<button onclick="addRow()">＋ 商品追加</button>
+
+<div class="right">
+    小計：<span id="subTotal">0円</span><br>
+    消費税：<span id="taxTotal">0円</span><br>
+    <strong>合計：<span id="grandTotal">0円</span></strong>
+</div>
+
+<!-- ===== 我方会社 ===== -->
+<button onclick="toggleCompany()">我方会社情報を設定</button>
+
+<div id="companyBox" class="popup">
+    <input id="myCompany" placeholder="会社名">
+    <input id="regNumber" placeholder="登録番号">
+    <input id="myAddress" placeholder="住所">
+    <input id="invoiceNo" placeholder="請求書番号">
+    <button onclick="saveCompany()">保存</button>
+</div>
+
+<br>
+<button onclick="createInvoice()">請求書を作成</button>
+
+<!-- ===== 請求書 ===== -->
+<div id="invoice" class="invoice">
+
+<div class="header">
+    <div class="box">
+        <strong id="i_client"></strong><br>
+        <span id="i_clientAddress"></span><br>
+        御中
+    </div>
+
+    <div class="box right">
+        <strong id="i_myCompany"></strong><br>
+        登録番号：<span id="i_reg"></span><br>
+        <span id="i_myAddress"></span><br>
+        請求書番号：<span id="i_no"></span>
+    </div>
+</div>
+
+<hr>
+
+<table id="invoiceTable">
+<tr>
+    <th>商品名</th>
+    <th>単価</th>
+    <th>数量</th>
+    <th>金額</th>
+</tr>
+</table>
+
+<hr>
+
+<div class="right">
+    小計：<span id="i_sub"></span><br>
+    消費税：<span id="i_tax"></span><br>
+    <strong>合計：<span id="i_total"></span></strong>
+</div>
+
+</div>
+
+<button onclick="downloadPDF()">PDFとして保存</button>
+
+<script>
+/* ===== 共通：金額表示 ===== */
+function yen(num) {
+    return num.toLocaleString("ja-JP") + "円";
+}
+
+/* ===== 取引先 ===== */
+function saveClient() {
+    const name = clientName.value;
+    const address = clientAddress.value;
+    if (!name) return alert("会社名を入力してください");
+
+    const clients = JSON.parse(localStorage.getItem("clients") || "[]");
+    clients.push({ name, address });
+    localStorage.setItem("clients", JSON.stringify(clients));
+    loadClients();
+}
+
+function loadClients() {
+    clientSelect.innerHTML = `<option value="">取引先を選択</option>`;
+    const clients = JSON.parse(localStorage.getItem("clients") || "[]");
+    clients.forEach((c, i) => {
+        const op = document.createElement("option");
+        op.value = i;
+        op.textContent = c.name;
+        clientSelect.appendChild(op);
+    });
+}
+
+function selectClient() {
+    if (clientSelect.value === "") return;
+    const c = JSON.parse(localStorage.getItem("clients"))[clientSelect.value];
+    clientName.value = c.name;
+    clientAddress.value = c.address;
+}
+
+/* ===== 商品 ===== */
+function addRow() {
+    const r = itemTable.insertRow();
+    r.innerHTML = `
+        <td><input class="name"></td>
+        <td><input type="number" class="price"></td>
+        <td><input type="number" class="qty"></td>
+        <td>
+            <select class="tax">
+                <option value="0.08">8%</option>
+                <option value="0.10">10%</option>
+            </select>
+        </td>
+        <td class="amount">0円</td>
+    `;
+    r.querySelectorAll("input,select").forEach(el => el.oninput = calculate);
+}
+
+function calculate() {
+    let sub = 0, tax = 0;
+
+    [...itemTable.rows].slice(1).forEach(r => {
+        const p = +r.querySelector(".price").value;
+        const q = +r.querySelector(".qty").value;
+        const t = +r.querySelector(".tax").value;
+        const a = p * q;
+        r.querySelector(".amount").textContent = yen(a);
+        sub += a;
+        tax += Math.floor(a * t);
+    });
+
+    subTotal.textContent = yen(sub);
+    taxTotal.textContent = yen(tax);
+    grandTotal.textContent = yen(sub + tax);
+}
+
+/* ===== 我方会社 ===== */
+function toggleCompany() {
+    companyBox.style.display = companyBox.style.display === "block" ? "none" : "block";
+}
+
+function saveCompany() {
+    localStorage.setItem("myCompany", myCompany.value);
+    localStorage.setItem("regNumber", regNumber.value);
+    localStorage.setItem("myAddress", myAddress.value);
+    localStorage.setItem("invoiceNo", invoiceNo.value);
+}
+
+/* ===== 請求書 ===== */
+function createInvoice() {
+    i_client.textContent = clientName.value;
+    i_clientAddress.textContent = clientAddress.value;
+
+    i_myCompany.textContent = localStorage.getItem("myCompany") || "";
+    i_reg.textContent = localStorage.getItem("regNumber") || "";
+    i_myAddress.textContent = localStorage.getItem("myAddress") || "";
+    i_no.textContent = localStorage.getItem("invoiceNo") || "";
+
+    invoiceTable.innerHTML = `
+        <tr>
+            <th>商品名</th><th>単価</th><th>数量</th><th>金額</th>
+        </tr>`;
+
+    [...itemTable.rows].slice(1).forEach(r => {
+        invoiceTable.insertRow().innerHTML = `
+            <td>${r.querySelector(".name").value}</td>
+            <td>${yen(+r.querySelector(".price").value)}</td>
+            <td>${r.querySelector(".qty").value}</td>
+            <td>${r.querySelector(".amount").textContent}</td>
+        `;
+    });
+
+    i_sub.textContent = subTotal.textContent;
+    i_tax.textContent = taxTotal.textContent;
+    i_total.textContent = grandTotal.textContent;
+
+    invoice.style.display = "block";
+}
+
+function downloadPDF() {
+    html2pdf().from(invoice).save("請求書.pdf");
+}
+
+window.onload = () => {
+    loadClients();
+    myCompany.value = localStorage.getItem("myCompany") || "";
+    regNumber.value = localStorage.getItem("regNumber") || "";
+    myAddress.value = localStorage.getItem("myAddress") || "";
+    invoiceNo.value = localStorage.getItem("invoiceNo") || "";
+};
+</script>
+
+</body>
+</html>
